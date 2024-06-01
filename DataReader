@@ -1,0 +1,127 @@
+#include <Windows.h>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <winsock.h>
+#include <mysql.h>
+#include <vector>
+
+using namespace std;
+
+std::vector<int> string_to_vector(const std::string& whole_data) {
+	std::vector<int> data_vector;
+	std::stringstream ss(whole_data);
+	std::string item;
+	while (std::getline(ss, item, ',')) {
+		data_vector.push_back(std::stoi(item));
+	}
+	return data_vector;
+}
+
+int main()
+{
+	MYSQL mysql;
+	mysql_init(&mysql);
+	HANDLE hSerial;
+	DCB dcbSerialParams;
+	COMMTIMEOUTS timeouts;
+
+	// 打开串口
+	hSerial = CreateFile(TEXT("COM5"), GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hSerial == INVALID_HANDLE_VALUE) {
+		std::cout << "无法打开串口" << std::endl;
+		return 1;
+	}
+
+	// 设置串口参数
+	dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
+	if (!GetCommState(hSerial, &dcbSerialParams)) {
+		std::cout << "无法获取串口参数" << std::endl;
+		CloseHandle(hSerial);
+		return 1;
+	}
+	dcbSerialParams.BaudRate = CBR_115200; // 设置波特率为9600
+	dcbSerialParams.ByteSize = 8; // 设置数据位为8位
+	dcbSerialParams.StopBits = ONESTOPBIT; // 设置停止位为1位
+	dcbSerialParams.Parity = NOPARITY; // 设置无奇偶校验
+	if (!SetCommState(hSerial, &dcbSerialParams)) {
+		std::cout << "无法设置串口参数" << std::endl;
+		CloseHandle(hSerial);
+		return 1;
+	}
+
+	// 设置串口读取超时时间
+	timeouts.ReadIntervalTimeout = 50;
+	timeouts.ReadTotalTimeoutConstant = 50;
+	timeouts.ReadTotalTimeoutMultiplier = 10;
+	timeouts.WriteTotalTimeoutConstant = 50;
+	timeouts.WriteTotalTimeoutMultiplier = 10;
+	if (!SetCommTimeouts(hSerial, &timeouts)) {
+		std::cout << "无法设置串口超时时间" << std::endl;
+		CloseHandle(hSerial);
+		return 1;
+	}
+
+	//连接到MySQL数据库
+	MYSQL* conn;
+	conn = mysql_init(NULL);
+	if (conn == NULL) {
+		std::cout << "MySQL初始化失败" << std::endl;
+		CloseHandle(hSerial);
+		return 1;
+	}
+	if (mysql_real_connect(conn, "localhost", "root", "123456789", "test", 0, NULL, 0) == NULL) {
+		std::cout << "MySQL连接失败： " << mysql_error(conn) << std::endl;
+		mysql_close(conn);
+		CloseHandle(hSerial);
+		return 1;
+	}
+	// 读取并打印串口数据，并将数据插入到MySQL数据库中
+	char data;
+	DWORD bytesRead;
+
+	string whole_data = "";
+	cout << "开始接收数据" << endl;
+	while (true) {
+		if (ReadFile(hSerial, &data, 1, &bytesRead, NULL)) {
+			if (bytesRead > 0) {
+				std::cout << data;
+
+				string str = string(1, data);
+				cout << "str = " << str << endl;
+
+				if (str != "E")
+					whole_data += str;
+				else
+				{
+					 //将数据插入到MySQL数据库
+					cout << "whole_data = " << whole_data << endl;
+					std::vector<int> data_vector = string_to_vector(whole_data);
+
+					string sendToMysql = "";
+					for (int i = 0; i < 4; i++)
+					{
+						int value = data_vector[2 * i] * 255 + data_vector[2 * i + 1];
+						sendToMysql += to_string(value);
+						sendToMysql += ",";
+					}
+					cout << "sendToMysql = " << sendToMysql << endl;
+
+					std::string query = "INSERT INTO received_data_5 (data) VALUES ('" + sendToMysql + "')";
+					if (mysql_query(conn, query.c_str())) {
+						std::cout << "插入数据失败： " << mysql_error(conn) << std::endl;
+					}
+
+					whole_data = "";
+				}
+
+				
+			}
+		}
+	}
+
+	// 关闭串口
+	CloseHandle(hSerial);
+
+	return 0;
+}
